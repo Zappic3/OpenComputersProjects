@@ -9,7 +9,7 @@ local rc = require("rc")
 
 -- settings
 local programmName = "TeleportController"
-local programmVersion = "0.8"
+local programmVersion = "1.1"
 local tpDataSourceUrl = "https://zappic.dev/files/gtnh_teleporters.json"
 local statusBarSize = 3 -- less than 3 is unusable
 local teleportDepartDelay = 3
@@ -46,7 +46,7 @@ local hexToColor = {
   [0xf] = "Black",
 }
 
-local autostartServiceName = "teleporter"
+local autostartServiceName = "teleporter_autostart"
 
 -- runtime global variables
 local localTeleporterId = nil
