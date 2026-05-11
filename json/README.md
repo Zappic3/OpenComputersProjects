@@ -1,0 +1,1 @@
+Mirror of https://github.com/rxi/json.lua/tree/master for easier install with OPPM
