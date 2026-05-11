@@ -780,13 +780,14 @@ ender_chest.setFrequency(localTeleporterFreq) -- its important that this happens
 checkItemReqs()
 term.setCursorBlink(false)
 screen.setTouchModeInverted(true)
+redstone.setWakeThreshold(10) -- so the computer can be woken up wirelessly
+shell.execute("rc " .. autostartServiceName .. " enable") -- enable teleporter autostart (this is before the screen is updated, so if the service is already enabled, the error will be hidden)
 redstone.setOutput(sides.bottom, 0)
 term.clear()
 updateTeleporterDisplay()
 event.listen("walk", walkListener)
 
-redstone.setWakeThreshold(10) -- so the computer can be woken up wirelessly
-shell.execute("rc " .. autostartServiceName .. " enable") -- enable teleporter autostart
+
 
 -- MAIN EVENT LOOP
 local running = true
