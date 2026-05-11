@@ -1,4 +1,4 @@
-local uiSuccess, ui = pcall(require, "ui_lib")
+local uiSuccess, ui = pcall(require, "simple_ui_lib")
 local jsonSuccess, json = pcall(require, "json")
 local comp = require("component")
 local event = require("event")
