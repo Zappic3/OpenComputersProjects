@@ -5,7 +5,7 @@ local event = require("event")
 local term = require("term")
 local sides = require("sides")
 local computer = require("computer")
-local rc = require("rc")
+local shell = require("shell")
 
 -- settings
 local programmName = "TeleportController"
@@ -682,7 +682,7 @@ local function cleanup()
   gpu.setBackground(0x000000)
   gpu.setForeground(0xFFFFFF)
   term.clear()
-  rc.stop(autostartServiceName)
+  shell.execute("rc " + autostartServiceName + " disable") -- disable teleporter autostart
   print("Program terminated successfully.")
 end
 
@@ -781,7 +781,7 @@ updateTeleporterDisplay()
 event.listen("walk", walkListener)
 
 redstone.setWakeThreshold(10) -- so the computer can be woken up wirelessly
-rc.start(autostartServiceName) -- enable teleporter autostart
+shell.execute("rc " + autostartServiceName + " enable") -- enable teleporter autostart
 
 -- MAIN EVENT LOOP
 local running = true
