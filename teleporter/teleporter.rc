@@ -1,0 +1,13 @@
+
+function start()
+  local path = shell.resolve("teleporter.lua")  -- searches PATH, finds wherever it was installed
+  if path then
+    shell.execute(path)
+  else
+    io.stderr:write("teleporter: could not find executable\n")
+  end
+end
+
+function stop()
+  -- do nothing
+end
