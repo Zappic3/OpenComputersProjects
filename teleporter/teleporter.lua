@@ -682,7 +682,7 @@ local function cleanup()
   gpu.setBackground(0x000000)
   gpu.setForeground(0xFFFFFF)
   term.clear()
-  shell.execute("rc " + autostartServiceName + " disable") -- disable teleporter autostart
+  shell.execute("rc " .. autostartServiceName .. " disable") -- disable teleporter autostart
   print("Program terminated successfully.")
 end
 
@@ -781,7 +781,7 @@ updateTeleporterDisplay()
 event.listen("walk", walkListener)
 
 redstone.setWakeThreshold(10) -- so the computer can be woken up wirelessly
-shell.execute("rc " + autostartServiceName + " enable") -- enable teleporter autostart
+shell.execute("rc " .. autostartServiceName .. " enable") -- enable teleporter autostart
 
 -- MAIN EVENT LOOP
 local running = true
