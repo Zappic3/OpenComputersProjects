@@ -6,6 +6,7 @@ local term = require("term")
 local sides = require("sides")
 local computer = require("computer")
 local shell = require("shell")
+local filesystem = require("filesystem")
 
 -- settings
 local programmName = "TeleportController"
@@ -21,7 +22,8 @@ local ackTokenName = "minecraft:paper"
 local enderchestName = "tile.enderchest"
 local spatialIoName = "tile.appliedenergistics2.BlockSpatialIOPort"
 local storageName = "tile.etfuturum.barrel"
-local saveFile = "teleporterId.txt"
+local saveDir = "/var/lib/teleporter/"
+local saveFile = saveDir .. "teleporterId.txt"
 
 local baseUpdateInterval = 3600 -- 1 hour in seconds
 local maxUpdateJitter = 300     -- Up to 5 minutes of randomness
@@ -610,6 +612,9 @@ local function touchListener(_, screenAdress, x, y, button, playerName) -- butto
 end
 
 local function saveTeleporterId(string)
+  if not filesystem.exists(saveDir) then
+    filesystem.makeDirectory(saveDir)
+  end
   local file, reason = io.open(saveFile, "w")
   if not file then
     error("couldn't open file " .. tostring(reason))
