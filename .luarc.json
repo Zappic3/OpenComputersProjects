@@ -1,0 +1,39 @@
+{
+  "runtime": {
+    "version": "Lua 5.3"
+  },
+  "diagnostics": {
+    "globals": [
+      "describe",
+      "it",
+      "before_each",
+      "after_each",
+      "after_all",
+      "before_all",
+      "pending",
+      "spy",
+      "mock",
+      "stub",
+      "assert",
+      "context",
+      "spec"
+    ]
+  },
+  "workspace": {
+    "checkThirdParty": true,
+    "userThirdParty": ["C:/Users/Anton/AppData/Roaming/LuaThridPartyAddons"],
+    "library": [
+      "oc-type",
+      "${addons}/busted/module/library",
+      "${3rd}/luassert/library",
+            "C:/Users/Anton/AppData/Roaming/LuaThridPartyAddons/opencomputers-openos-definitions/library"
+    ]
+  },
+    "runtime.path": [
+        "?.lua",
+        "?/init.lua",
+        "/lib/?.lua",
+        "/lib/?/init.lua",
+        "/library/?.lua"
+    ]
+}
