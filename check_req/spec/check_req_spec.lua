@@ -1,4 +1,4 @@
-local oc = require("mock_oc")
+local oc = require("spec.mock_oc")
 
 -- Install fakes before loading the library under test
 oc.install()

@@ -30,4 +30,4 @@ jobs:
       - name: Run tests
         run: |
           eval $(luarocks path --bin)
-          busted --output=TAP check_req/spec
+          cd check_req && busted --output=TAP check_req/spec
