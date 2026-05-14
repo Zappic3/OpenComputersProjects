@@ -1,3 +1,4 @@
+local sides = require("sides")
 local req_lib = require("check_req")
 
 local req = req_lib.new()
@@ -12,16 +13,27 @@ req:addRequire("nonexistent_module")
 req:addComponent("gpu", "gpu")
 
 -- test redstone, requiring at least T2
-req:addComponent("redstone", "redstone", {"t2"},
+req:addComponent("redstone", "redstone", { "t2" },
     "Redstone card T2 required but not found",
     "Redstone card T2 found"
 )
 
 -- test data card, accepting T2 or T3
-req:addComponent("data", "data", {"t2", "t3"},
+req:addComponent("data", "data", { "t2", "t3" },
     "Data card T2 or T3 required but not found",
     "Data card (T2 or T3) found"
 )
+
+
+req:addTransposer()
+-- chest must be on top
+    :requireInventory("minecraft:chest", sides.top)
+-- chest must contain 32 coal in any slot
+    :requireItem("minecraft:coal", 32, nil, sides.top)
+    :named("example_transposer")
+    :messages("Transposer setup is wrong", "Transposer setup is correct")
+    :registerDebug() -- debug function to display more info
+    :register()
 
 -- run all checks
 local total_success, success_data, results_data = req:check()
