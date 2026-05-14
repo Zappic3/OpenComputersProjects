@@ -29,9 +29,7 @@ local function getDetectors()
         return false, nil
       end
       local r = component.getPrimary("redstone")
-      if r.getBundledInput then
-        return true, "t2"
-      end
+      if r.getBundledInput then return true, "t2" end
       return true, "t1"
     end,
 
@@ -43,6 +41,32 @@ local function getDetectors()
       if d.generateKeyPair then return true, "t3" end
       if d.deflate then return true, "t2" end
       return true, "t1"
+    end,
+
+    ["gpu"] = function()
+      if not component.isAvailable("gpu") then
+        return false, nil
+      end
+      local g = component.getPrimary("gpu")
+      local mem = g.totalMemory()
+      if mem > 4000 then return true, "t3" end
+      if mem > 800 then return true, "t2" end
+      return true, "t1"
+    end,
+
+    ["screen"] = function()
+      if not component.isAvailable("screen") then
+        return false, nil
+      end
+      local s = component.getPrimary("screen")
+      if s.isPrecise and s.isPrecise() then return true, "t3" end
+      local ok, tier = getDetectors()["gpu"]()
+      if ok and tier ~= "t1" then
+        local g = component.getPrimary("gpu")
+        if g.maxDepth() >= 4 then return true, "t2" end
+        return true, "t1" -- gpu is t2+ but depth is 1, so screen is the bottleneck
+      end
+      return true, "t1"   -- gpu is t1, can't determine if screen is better
     end,
   }
 
@@ -199,9 +223,12 @@ local function checkAmount(actual, condition)
 end
 
 local function checkTransposer(transposer, conditions)
+  local conditions_failed = false
   local sideMap = {}
+  local ps = ""
+  local cond_succ_count = 0
 
-  -- check inventories: ALL tank conditions must match
+  -- check inventories: ALL inventory conditions must match
   if #conditions.inventories > 0 then
     for _, inv in ipairs(conditions.inventories) do
       local sidesToCheck = resolveSides(inv.sides)
@@ -216,8 +243,12 @@ local function checkTransposer(transposer, conditions)
           break
         end
       end
-      -- if no side of the transposer has the inventory, return
-      if not found then return false, nil end
+
+      if inv.ps(found) ~= nil then
+        ps = ps .. inv.ps(found) .. "\n"
+      end
+      
+      if not found then conditions_failed = true else cond_succ_count = cond_succ_count + 1 end
     end
   end
 
@@ -228,11 +259,18 @@ local function checkTransposer(transposer, conditions)
     for _, side in ipairs(sidesToCheck) do
       local ok, info = pcall(transposer.getTankInfo, side)
       if ok and info and #info > 0 then
+        if tank.side_key then
+          sideMap[tank.side_key] = side
+        end
         found = true
         break
       end
     end
-    if not found then return false, nil end
+
+    if tank.ps(found) ~= nil then
+      ps = ps .. tank.ps(found) .. "\n"
+    end
+    if not found then conditions_failed = true else cond_succ_count = cond_succ_count + 1 end
   end
 
   -- check items: ALL item conditions must match, each searches independently
@@ -249,8 +287,22 @@ local function checkTransposer(transposer, conditions)
         end)()
         for _, slot in ipairs(slotsToCheck) do
           local ok2, stack = pcall(transposer.getStackInSlot, side, slot)
+
+          -- check for empty slot
+          if stack == nil and item.name == nil then
+            if item.side_key then
+                sideMap[item.side_key] = side
+              end
+              found = true
+              break
+          end
+
+          -- check for item in slot
           if ok2 and stack and stack.name == item.name then
             if item.amount == nil or checkAmount(stack.size, item.amount) then
+              if item.side_key then
+                sideMap[item.side_key] = side
+              end
               found = true
               break
             end
@@ -260,7 +312,11 @@ local function checkTransposer(transposer, conditions)
       -- skip remaining sides if target items have already been found
       if found then break end
     end
-    if not found then return false, nil end
+
+    if item.ps(found) ~= nil then
+      ps = ps .. item.ps(found) .. "\n"
+    end
+    if not found then conditions_failed = true else cond_succ_count = cond_succ_count + 1 end
   end
 
   -- check fluids: ALL fluid conditions must match, each searches independently
@@ -287,10 +343,17 @@ local function checkTransposer(transposer, conditions)
       end
       if found then break end
     end
-    if not found then return false, nil end
+
+    if fluid.ps(found) ~= nil then
+      ps = ps .. fluid.ps(found) .. "\n"
+    end
+    if not found then conditions_failed = true else cond_succ_count = cond_succ_count + 1 end
   end
 
-  return true, sideMap
+  if conditions_failed then
+    return false, nil, cond_succ_count, ps
+  end
+  return true, sideMap, cond_succ_count, ps
 end
 
 --- @param parent Req
@@ -311,29 +374,74 @@ end
 --- Succeeds if ANY of the added inventory conditions are found.
 --- @param inventory_name string
 --- @param sides integer|table|nil Single side, list of sides, or nil for any
+--- @param fail_ps string|nil PS to add if this condition fails
+--- @param succ_ps string|nil PS to add if this condition succeeds
 --- @param side_key string|nil Key to store the found side under in results
 --- @return TransposerReq
-function TransposerReq:requireInventory(inventory_name, sides, side_key)
-  table.insert(self._inventories, { name = inventory_name, sides = sides, side_key = side_key })
+function TransposerReq:requireInventory(inventory_name, sides, fail_ps, succ_ps, side_key)
+  table.insert(self._inventories, {
+    name = inventory_name,
+    sides = sides,
+    side_key = side_key,
+    ps =
+        function(succ)
+          if succ then
+            return succ_ps
+          end
+          return fail_ps
+        end
+  })
+
   return self
 end
 
 --- Require a tank to be present on specific side(s).
 --- @param side integer|table|nil Single side, list of sides, or nil for any
+--- @param fail_ps string|nil PS to add if this condition fails
+--- @param succ_ps string|nil PS to add if this condition succeeds
+--- @param side_key string|nil Key to store the found side under in results
 --- @return TransposerReq
-function TransposerReq:requireTank(side)
-  table.insert(self._tanks, { sides = side })
+function TransposerReq:requireTank(side, fail_ps, succ_ps, side_key)
+  table.insert(self._tanks, {
+    sides = side,
+    side_key = side_key,
+    ps =
+        function(succ)
+          if succ then
+            return succ_ps
+          end
+          return fail_ps
+        end
+  })
+
   return self
 end
 
 --- Require an item to be present in an inventory.
---- @param item_name string
+--- @param item_name string|nil Name of the item, or nil for no item
 --- @param amount integer|table|nil Exact number, {min=x, max=y}, or nil for any amount
 --- @param slot integer|nil Required slot, nil means any slot
 --- @param side integer|table|nil Single side, list of sides, or nil for any
+--- @param fail_ps string|nil PS to add if this condition fails
+--- @param succ_ps string|nil PS to add if this condition succeeds
+--- @param side_key string|nil Key to store the found side under in results
 --- @return TransposerReq
-function TransposerReq:requireItem(item_name, amount, slot, side)
-  table.insert(self._items, { name = item_name, amount = amount, slot = slot, sides = side })
+function TransposerReq:requireItem(item_name, amount, slot, side, fail_ps, succ_ps, side_key)
+  table.insert(self._items, {
+    name = item_name,
+    amount = amount,
+    slot = slot,
+    sides = side,
+    side_key = side_key,
+    ps =
+        function(succ)
+          if succ then
+            return succ_ps
+          end
+          return fail_ps
+        end
+  })
+
   return self
 end
 
@@ -342,9 +450,24 @@ end
 --- @param amount integer|table|nil Exact number, {min=x, max=y}, or nil for any amount
 --- @param side integer|table|nil Single side, list of sides, or nil for any
 --- @param tank integer|nil Specific tank index on the side, nil means any tank
+--- @param fail_ps string|nil PS to add if this condition fails
+--- @param succ_ps string|nil PS to add if this condition succeeds
 --- @return TransposerReq
-function TransposerReq:requireFluid(fluid_name, amount, side, tank)
-  table.insert(self._fluids, { name = fluid_name, amount = amount, sides = side, tank = tank })
+function TransposerReq:requireFluid(fluid_name, amount, side, tank, fail_ps, succ_ps)
+  table.insert(self._fluids, {
+    name = fluid_name,
+    amount = amount,
+    sides = side,
+    tank = tank,
+    ps =
+        function(succ)
+          if succ then
+            return succ_ps
+          end
+          return fail_ps
+        end
+  })
+
   return self
 end
 
@@ -379,22 +502,38 @@ function TransposerReq:register()
   local req_name = self._req_name or "transposer"
   local fail_msg = self._fail_msg or "No matching transposer found"
   local succ_msg = self._succ_msg or "Found matching transposer"
+  local all_fail_ps = ""
+
+  for category, elements in pairs(conditions) do
+    for i, cond in ipairs(elements) do
+      if cond.fail_ps ~= nil then
+        all_fail_ps = all_fail_ps .. cond.fail_ps .. "\n"
+      end
+    end
+  end
 
   local task = function()
     local component = require("component")
     if not component.isAvailable("transposer") then
-      return false, nil
+      return false, nil, all_fail_ps
     end
 
+    local highest_succ_count = 0
+    local highest_succ_count_ps = nil
     for address, _ in component.list("transposer") do
       local transposer = component.proxy(address)
-      local success, sideMap = checkTransposer(transposer, conditions)
+      local success, sideMap, cond_succ_count, ps = checkTransposer(transposer, conditions)
       if success then
-        return true, { address = address, sides = sideMap }
+        return true, { address = address, sides = sideMap }, ps
+      end
+
+      if cond_succ_count > highest_succ_count then
+        highest_succ_count = cond_succ_count
+        highest_succ_count_ps = ps
       end
     end
 
-    return false, nil
+    return false, nil, highest_succ_count_ps
   end
 
   table.insert(self._parent.requirements, {
@@ -511,12 +650,12 @@ function Req:check()
 
   for _, data in ipairs(self.requirements) do
     local req = data["req"]
-    local success, result = req()
+    local success, result, ps = req()
 
     -- save results for later visualization
     table.insert(new_success_data, {
       ["success"] = success,
-      ["message"] = success and data["succ_msg"] or data["fail_msg"]
+      ["message"] = (success and data["succ_msg"] or data["fail_msg"]) .. (ps or "")
     })
 
     -- save return values for later use
