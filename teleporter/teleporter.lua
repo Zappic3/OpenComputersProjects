@@ -1,5 +1,4 @@
-local uiSuccess, ui = pcall(require, "simple_ui_lib")
-local jsonSuccess, json = pcall(require, "json")
+local check_req = require("check_req")
 local comp = require("component")
 local event = require("event")
 local term = require("term")
@@ -17,16 +16,16 @@ local teleportDepartDelay = 3
 local teleportArriveDelay = 3
 local timeSinceLastWalkForArrival = 10
 local timeSinceLastWalkForSleep = 5 * 60
-local spatialDiskName = "appliedenergistics2:item.ItemSpatialStorageCell"
+local spatialDiskName = "appliedenergistics2:item.ItemSpatialStorageCell.2Cubed"
 local ackTokenName = "minecraft:paper"
 local enderchestName = "tile.enderchest"
+local storageSide = sides.bottom;
 local spatialIoName = "tile.appliedenergistics2.BlockSpatialIOPort"
-local storageName = "tile.etfuturum.barrel"
 local saveDir = "/var/lib/teleporter/"
 local saveFile = saveDir .. "teleporterId.txt"
 
-local baseUpdateInterval = 3600 -- 1 hour in seconds
-local maxUpdateJitter = 300     -- Up to 5 minutes of randomness
+local baseUpdateInterval = 3600      -- 1 hour in seconds
+local maxUpdateJitter = 300          -- Up to 5 minutes of randomness
 local waitingForResponseTimeout = 10 -- in seconds
 
 local hexToColor = {
@@ -50,6 +49,72 @@ local hexToColor = {
 
 local autostartServiceName = "teleporter_autostart"
 
+-- check reqs
+local req = check_req.new()
+
+-- modules
+req:addRequire("simple_ui_lib",
+  "Required library 'simple_ui_lib' is missing. Try 'oppm install simple_ui_lib'",
+  nil
+)
+req:addRequire("json",
+  "Required library 'json' is missing. Try 'oppm install json.lua'",
+  nil
+)
+
+-- components
+req:addComponent("gpu", "gpu", {"t2", "t3"},
+"Teleporter requires at least a Graphics Card T2")
+req:addComponent("screen", "screen", {"t2", "t3"},
+"Teleporter requires at least a screen T2")
+req:addComponent("ender_chest", "ender_chest", nil,
+  "Teleporter requires an Enderchest connected via an Adapter")
+req:addComponent("redstone", "redstone", nil,
+  "Teleporter requires a redstone card")
+  --todo make intenet card optional based on settings
+req:addComponent("internet", "internet", nil,
+  "Teleporter requires an internet card") 
+req:addComponent("transposer", "transposer", nil,
+  "Teleporter requires a transposer")
+
+-- transposer inventory layout
+req:addTransposer()
+    :requireInventory(enderchestName, nil, "not connected to Enderchest", nil, "enderchest_side")
+    :requireInventory(spatialIoName, nil, "not connected to SpatialIO", nil, "spatialio_side")
+    :requireItem(spatialDiskName, 1, 1, storageSide, " > Expected 1x Spatial Storage Disk (".. spatialDiskName ..") in container slot 1")
+    :requireItem(ackTokenName, 1, 2, storageSide, " > Expected 1x (" .. ackTokenName .. ") in container slot 2")
+    :named("transposer_layout")
+    :messages(
+      "Transposer is missing following requirements:\n",
+      "Transposer ready"
+    )
+    :register()
+
+local total_success, success_data, results_data = req:check()
+req:displayResults(true)
+
+if not total_success then
+  print("At least one requirement was not met. Exiting...")
+  return
+end
+
+-- extract results
+local ui                = results_data["simple_ui_lib"]
+local json              = results_data["json"]
+local transposer_layout = results_data["transposer_layout"]
+local enderchestSide    = transposer_layout.sides["enderchest_side"]
+local spatialIoSide     = transposer_layout.sides["spatialio_side"]
+
+-- get proxies
+local gpu = comp.gpu
+local screen = comp.screen
+---@diagnostic disable-next-line: undefined-field
+local ender_chest = comp.ender_chest
+local redstone = comp.redstone
+local transposer = comp.transposer
+---@diagnostic disable-next-line: undefined-field
+local internet = comp.internet
+
 -- runtime global variables
 local localTeleporterId = nil
 local localTeleporterName = nil
@@ -65,92 +130,22 @@ local tpLogPos = 1
 local lastWalkTime = computer.uptime()
 local currentlySleeping = false
 
--- check requisite dependencies
-local unmetReqs = false
-if not comp.isAvailable("ender_chest") then
-  print("Teleporter requires an Enderchest connected via an Adapter")
-  unmetReqs = true
-end
-if not comp.isAvailable("redstone") then
-  print("Teleporter requires a redstone card")
-  unmetReqs = true
-end
-if not comp.isAvailable("internet") then
-  print("Teleporter requires a internet card")
-  unmetReqs = true
-end
-if not uiSuccess then
-  print("Teleporter requires the 'ui_lib' library.")
-  print("Place ui_lib.lua in /lib/ directory.")
-  unmetReqs = true
-end
-if not jsonSuccess then
-  print("Teleporter requires the 'json' library.")
-  print("Place json.lua in /lib/ directory.")
-  print("(https://github.com/rxi/json.lua)")
-  unmetReqs = true
-end
-
-if unmetReqs then
-  print("At least one requirement was not met. Exiting...")
-    return
-end
-
-local gpu = comp.gpu
-local screen = comp.screen
-local ender_chest = comp.ender_chest
-local redstone = comp.redstone
-local transposer = comp.transposer
-local internet = comp.internet
-
--- set resolution for sqare screens
-local x_aspect, y_apsect = screen.getAspectRatio()
-if x_aspect == y_apsect then
-  local w, h = gpu.maxResolution()
-  gpu.setResolution(2*h, h)
-end
-
-
--- check transposer connected inventories
-local enderchestSide = nil
-local spatialIoSide = nil
-local storageSide = nil
-
-for i = 0, 5 do
-    local invName = transposer.getInventoryName(i)
-    if invName == enderchestName then
-      enderchestSide = i
-    elseif invName == spatialIoName then
-      spatialIoSide = i
-    elseif invName == storageName then
-      storageSide = i
-    end
-end
-
-if enderchestSide == nil or spatialIoSide == nil or storageSide == nil then
-  print("Transposer is not connected with Enderchest, SpatialIO Port and/or Storage (" .. storageSide .. ")")
-  print("Enderchest Side: " .. tostring(enderchestSide))
-  print("SpatialIO Side: " .. tostring(spatialIoSide))
-  print("Storage Side: " .. tostring(storageSide))
-  return
-end
-
 local function decodeFreqToColor(freq)
   -- convert ferquency to 3-digit hex number
   local hexChars = "0123456789abcdef"
   local result = ""
 
   for i = 1, 3 do
-      local remainder = freq % 16
-      local char = hexChars:sub(remainder + 1, remainder + 1)
-      result = char .. result
-      freq = math.floor(freq / 16)
+    local remainder = freq % 16
+    local char = hexChars:sub(remainder + 1, remainder + 1)
+    result = char .. result
+    freq = math.floor(freq / 16)
   end
 
   -- get colors corresponding to each hex digit
   local colors = {}
   for i = 1, #result do
-    local digit = result:sub(i,i)
+    local digit = result:sub(i, i)
     local index = tonumber(digit, 16)
     colors[i] = (index and hexToColor[index]) or "Unknown"
   end
@@ -158,47 +153,31 @@ local function decodeFreqToColor(freq)
 end
 
 local function checkItemReqs()
-  local hasError = false
-  -- spatial disk in Storage
-  local storageSlot1 = transposer.getStackInSlot(storageSide, 1)
-  if storageSlot1 == nil or not string.find(storageSlot1.name, spatialDiskName) then
-    print("No Spacial Storage Disk in Storage (1. slot).")
-    hasError = true
-  end
+  local itemReqs = check_req.new()
+
+  itemReqs:addTransposer()
+  :messages("An error occured while performing item checks. Fix them and try again:\n")
+  -- token in 1. slot
+  :requireItem(spatialDiskName, 1, 1, storageSide, " > Expected 1x Spatial Storage Disk (".. spatialDiskName ..") in container slot 1")
+  -- ack token in 2. slot
+  :requireItem(ackTokenName, 1, 2, storageSide, " > Expected 1x Token (".. ackTokenName ..") in container slot 2")
+  -- spatial storage disk in 2. slot
+  :requireItem(ackTokenName, 1, 2, storageSide, " > Expected 1x (" .. ackTokenName .. ") in container slot 2")
   -- spatial io output slot empty
-  local spatialIoOutput = transposer.getStackInSlot(spatialIoSide, 2)
-  if spatialIoOutput ~= nil then
-    print("SpatialIO output slot needs to be empty.")
-    hasError = true
-  end
+  :requireItem(nil, 0, 2, spatialIoSide, " > SpatialIO output slot needs to be empty")
   -- spatial io input slot empty
-  local spatialIoInput = transposer.getStackInSlot(spatialIoSide, 1)
-  if spatialIoInput ~= nil then
-    print("SpatialIO input slot needs to be empty.")
-    hasError = true
-  end
-  -- ack token present in Storage
-  local storageSlot2 = transposer.getStackInSlot(storageSide, 2)
-  if storageSlot2 == nil or not string.find(storageSlot2.name, ackTokenName) then
-    print("No tokens found in Storage (2. slot). Insert one item of type " .. ackTokenName .. ".")
-    hasError = true
-  end
+  :requireItem(nil, 0, 1, spatialIoSide, " > SpatialIO input slot needs to be empty")
   -- no ack token in enderchest (that is set to this teleporters ferquency)
-  local lastEnderchestSlot = transposer.getStackInSlot(enderchestSide, 27)
-  if lastEnderchestSlot ~= nil then
-    print("Item found in Enderchest (slot 27) that shouldnt be there.")
-    hasError = true
-  end
+  :requireItem(nil, 0, 27, enderchestSide, " > Enderchest last slot (slot 27) should be empty")
   -- no item in enderchest second slot
-  local secondEnderchestSlot = transposer.getStackInSlot(enderchestSide, 2)
-  if secondEnderchestSlot ~= nil then
-    print("Item found in Enderchest (slot 2) that shouldnt be there.")
-    hasError = true
-  end
+  :requireItem(nil, 0, 2, enderchestSide, " > Enderchest 2nd slot should be empty")
+  :register()
 
+  local itemReqSuccess = itemReqs:check()
 
-  if hasError then
-    error("At least one error occured while checking items. Fix and try again!")
+  if not itemReqSuccess then
+    itemReqs:displayResults(false)
+    os.exit()
   end
 end
 
@@ -216,16 +195,16 @@ local function drawTpLog(text, centered)
   local logStartY = 1 -- Starting Y position (1-based in OC)
   local logStartX = 2
   local center = math.floor(x_res / 2)
-  
+
   -- 1. Check if we reached the bottom of the screen
   if logStartY + tpLogPos > y_res then
     -- Copy the entire screen (except the first line) up by 1
     -- Parameters: x, y, width, height, deltaX, deltaY
     gpu.copy(1, logStartY + 1, x_res, y_res - logStartY, 0, -1)
-    
+
     -- Clear the now-duplicated bottom line before writing new text
     gpu.fill(1, y_res, x_res, 1, " ")
-    
+
     -- Keep the position at the last line
     tpLogPos = y_res - logStartY
   end
@@ -238,7 +217,7 @@ local function drawTpLog(text, centered)
   end
 
   gpu.set(xPos, logStartY + tpLogPos, stringText)
-  
+
   -- 3. Increment position for next time
   tpLogPos = tpLogPos + 1
 end
@@ -263,10 +242,10 @@ end
 
 local function drawSymmetricalLoops(color1, color2, thickness)
   local w, h = gpu.getResolution()
-  
+
   -- We use the vertical height as the constraint for iterations
   local iterations = math.floor(h / 2)
-  
+
   -- Horizontal thickness is doubled to match visual vertical thickness
   local hThickness = thickness * 2
   local vThickness = thickness
@@ -279,7 +258,7 @@ local function drawSymmetricalLoops(color1, color2, thickness)
     local rectY = i + 1
     local rectW = w - (i * 4)
     local rectH = h - (i * 2)
-    
+
     if rectW <= 0 or rectH <= 0 then break end
     gpu.fill(rectX, rectY, rectW, rectH, " ")
 
@@ -299,7 +278,7 @@ end
 local function drawData(view, rect_id, data)
   local rectPos = view:rectGetPos(rect_id) -- [x, y, width, height]
   local rect_x, rect_y, rect_w, rect_h = rectPos[1], rectPos[2], rectPos[3], rectPos[4]
-  local x_start = rect_x + 1              -- Left edge + 1 for padding
+  local x_start = rect_x + 1               -- Left edge + 1 for padding
 
   -- Get the rectangle's colors, which were set right before this function was called
   local rect_colors = view:rectGetColors(rect_id)
@@ -336,11 +315,11 @@ local function drawData(view, rect_id, data)
     for i, line in ipairs(lines) do
       -- Calculate vertical position
       local y_pos = y_start + (i - 1)
-      
+
       -- Trim line if it exceeds the rectangle's width
       local text_to_draw = tostring(line)
       if utf8.len(line) > max_text_width then
-        text_to_draw = string.sub(line, 1, max_text_width+1)
+        text_to_draw = string.sub(line, 1, max_text_width + 1)
       end
       gpu.set(x_start, y_pos, text_to_draw)
     end
@@ -354,11 +333,12 @@ local function updateStatusBar(view, rect_id, data)
 
   local versionString = "v" .. programmVersion
   local colors = decodeFreqToColor(localTeleporterFreq)
-  local thisTeleporterString = string.format("%s [%s, %s, %s | %s]", localTeleporterName, colors[1], colors[2], colors[3], tostring(localTeleporterFreq))
+  local thisTeleporterString = string.format("%s [%s, %s, %s | %s]", localTeleporterName, colors[1], colors[2], colors
+    [3], tostring(localTeleporterFreq))
   local tpDataVersionString = "🗎: " .. currentTpsVersion
   local totalRightString = tpDataVersionString .. " | " .. versionString
-  gpu.set(x_res-string.len(totalRightString), rect_y+1, totalRightString)
-  gpu.set(rect_x+1, rect_y+1, thisTeleporterString)
+  gpu.set(x_res - string.len(totalRightString), rect_y + 1, totalRightString)
+  gpu.set(rect_x + 1, rect_y + 1, thisTeleporterString)
 end
 
 local function updateRectPositioning(view, rectCount)
@@ -373,9 +353,9 @@ local function updateRectPositioning(view, rectCount)
 
   y_res = y_res - statusBarSize
 
-  local y_size = math.floor((y_res-(y_buffer*4)) / max_vertcal_rects)
+  local y_size = math.floor((y_res - (y_buffer * 4)) / max_vertcal_rects)
   if rectCount < 5 then
-    y_size = math.floor((y_res-(y_buffer*(rectCount-1))) / rectCount)
+    y_size = math.floor((y_res - (y_buffer * (rectCount - 1))) / rectCount)
   end
 
   local x_rows = math.ceil(rectCount / max_vertcal_rects)
@@ -389,36 +369,36 @@ local function updateRectPositioning(view, rectCount)
   -- create sorted table to ensure correct rect order
   local sortedRects = {}
   for addr, rect in pairs(activeRects) do
-      table.insert(sortedRects, rect)
+    table.insert(sortedRects, rect)
   end
 
-table.sort(sortedRects, function(a, b)
+  table.sort(sortedRects, function(a, b)
     local posA = tonumber(a.pos) or 999
     local posB = tonumber(b.pos) or 999
-    
+
     if posA ~= posB then
-        return posA < posB
+      return posA < posB
     end
     -- Tie-breaker: sort by name if positions are equal
     return (a.name or "") < (b.name or "")
-end)
+  end)
   -- update rect positions
   for i, rect in ipairs(sortedRects) do
     local newPos = {}
     local currentRow = math.ceil(i / max_vertcal_rects)
-    local current_y_rect = i - (max_vertcal_rects * (currentRow-1))
+    local current_y_rect = i - (max_vertcal_rects * (currentRow - 1))
 
-    newPos[1] = (x_size + x_buffer) * (currentRow-1) +1 -- x
-    newPos[2] = ((y_size + y_buffer) * (current_y_rect-1)) +1 + statusBarSize -- y
-    newPos[3] = x_size -- width
-    newPos[4] = y_size -- height
+    newPos[1] = (x_size + x_buffer) * (currentRow - 1) + 1                       -- x
+    newPos[2] = ((y_size + y_buffer) * (current_y_rect - 1)) + 1 + statusBarSize -- y
+    newPos[3] = x_size                                                           -- width
+    newPos[4] = y_size                                                           -- height
     view:rectSetPos(rect, newPos)
   end
 end
 
 local function updateTeleporterData()
   local content = ""
-  
+
   local handle, reason = internet.request(tpDataSourceUrl)
   if not handle then
     print("Connection failed: " .. tostring(reason))
@@ -468,7 +448,7 @@ local function updateTeleporterDisplay()
     local x_res, y_res = gpu.getResolution()
     locationSelectorView = ui.View.new(x_res, y_res, 0x000000, 0xffffff)
     activeRects = {}
- 
+
     -- add new teleporters
     local rectCount = 0
     for id, tp in pairs(teleporterData.tps) do
@@ -481,7 +461,7 @@ local function updateTeleporterDisplay()
           id = id,
           pos = tp.pos or 100
         })
-        
+
         local colors = {
           to_num(tp.bg_color) or 0x000000,
           to_num(tp.fg_color) or 0xffffff,
@@ -499,11 +479,10 @@ local function updateTeleporterDisplay()
     currentTpsVersion = teleporterData.version
 
     -- add status bar
-    locationSelectorView:newRect(1,1,x_res-1, statusBarSize-1, updateStatusBar)
+    locationSelectorView:newRect(1, 1, x_res - 1, statusBarSize - 1, updateStatusBar)
 
     updateRectPositioning(locationSelectorView, rectCount)
     locationSelectorView:drawScreen()
-
   end
 end
 
@@ -524,7 +503,8 @@ local function touchListener(_, screenAdress, x, y, button, playerName) -- butto
         drawTpLog("##### TELEPORT IN PROGRESS #####", true)
         drawTpLog("##### DON'T INTERRUPT THIS DEVICE #####", true)
         local colors = decodeFreqToColor(data.freq)
-        drawTpLog(string.format("Setting frequency to %s (%s, %s, %s)...", tostring(data.freq), colors[1], colors[2], colors[3]))
+        drawTpLog(string.format("Setting frequency to %s (%s, %s, %s)...", tostring(data.freq), colors[1], colors[2],
+          colors[3]))
         ender_chest.setFrequency(data.freq)
         -- überprüfen ob ein teleportvorgang mit dem zielteleport momentan stattfindet
         drawTpLog("Check if target teleporter is already occupied...")
@@ -561,7 +541,6 @@ local function touchListener(_, screenAdress, x, y, button, playerName) -- butto
             teleportinProgress = false
             return
           end
-
         end
 
         drawTpLog("Teleporting in:")
@@ -600,7 +579,8 @@ local function touchListener(_, screenAdress, x, y, button, playerName) -- butto
         drawTpLog("Transfering disk from enderchets to Storage...")
         transposer.transferItem(enderchestSide, storageSide, 1, 1, 1)
         local colors = decodeFreqToColor(localTeleporterFreq)
-        drawTpLog(string.format("Resetting frequency to %s (%s, %s, %s)...", localTeleporterFreq, colors[1], colors[2], colors[3]))
+        drawTpLog(string.format("Resetting frequency to %s (%s, %s, %s)...", localTeleporterFreq, colors[1], colors[2],
+          colors[3]))
         ender_chest.setFrequency(localTeleporterFreq)
         drawTpLog("Teleporting sequence complete!")
         tpLogCleanup()
@@ -642,8 +622,8 @@ local function letUserSetTeleporterId(tps)
 
   for id, tp in pairs(tps) do
     teleporters[index] = id
-    print("["..index.."] ".. tp.name .. " (" ..id..")")
-    index = index+1
+    print("[" .. index .. "] " .. tp.name .. " (" .. id .. ")")
+    index = index + 1
   end
 
   if index == 1 then
@@ -688,6 +668,9 @@ local function cleanup()
   gpu.setForeground(0xFFFFFF)
   term.clear()
   shell.execute("rc " .. autostartServiceName .. " disable") -- disable teleporter autostart
+  -- reset resolution to maximum
+  local w, h = gpu.maxResolution()
+  gpu.setResolution(w, h)
   print("Program terminated successfully.")
 end
 
@@ -701,10 +684,10 @@ local function recieveTeleport()
   drawTpLog("Waiting for sender to transmitt disk...")
   while true do
     local enderchestFirstSlot = transposer.getStackInSlot(enderchestSide, 1)
-     if enderchestFirstSlot ~= nil and string.find(enderchestFirstSlot.name, spatialDiskName) then
+    if enderchestFirstSlot ~= nil and string.find(enderchestFirstSlot.name, spatialDiskName) then
       drawTpLog("Disk recieved!")
       break
-     end
+    end
   end
   drawTpLog("Moving Stored disk to Enderchest...")
   transposer.transferItem(storageSide, enderchestSide, 1, 1, 2)
@@ -770,7 +753,7 @@ if teleporterData == nil then
 end
 localTeleporterId = loadTeleporterId()
 if localTeleporterId == nil then
-    letUserSetTeleporterId(teleporterData.tps)
+  letUserSetTeleporterId(teleporterData.tps)
 else
   localTeleporterName = teleporterData.tps[localTeleporterId].name
   localTeleporterFreq = teleporterData.tps[localTeleporterId].frequency
@@ -778,9 +761,17 @@ end
 
 ender_chest.setFrequency(localTeleporterFreq) -- its important that this happens before checkItemReqs()
 checkItemReqs()
+
+-- set resolution for sqare screens
+local x_aspect, y_apsect = screen.getAspectRatio()
+if x_aspect == y_apsect then
+  local w, h = gpu.maxResolution()
+  gpu.setResolution(2 * h, h)
+end
+
 term.setCursorBlink(false)
 screen.setTouchModeInverted(true)
-redstone.setWakeThreshold(10) -- so the computer can be woken up wirelessly
+redstone.setWakeThreshold(10)                             -- so the computer can be woken up wirelessly
 shell.execute("rc " .. autostartServiceName .. " enable") -- enable teleporter autostart (this is before the screen is updated, so if the service is already enabled, the error will be hidden)
 redstone.setOutput(sides.bottom, 0)
 term.clear()
@@ -788,18 +779,16 @@ updateTeleporterDisplay()
 event.listen("walk", walkListener)
 
 
-
 -- MAIN EVENT LOOP
 local running = true
 while running do
   -- event.pull() halts the script until an event (touch, key, etc.) happens
-  local eventData = {event.pull(1)}
+  local eventData = { event.pull(1) }
   local eventName = eventData[1]
 
   if eventName == "interrupted" then
     -- User pressed Ctrl+C
     running = false
-
   elseif eventName == "touch" then
     if not currentlySleeping then
       -- Unpack touch data: name, screenAddress, x, y, button, playerName
@@ -817,7 +806,7 @@ while running do
   if now >= nextUpdate then
     -- Attempt the update
     local ok, err = pcall(updateTeleporterData)
-    
+
     if ok then
       updateTeleporterDisplay()
       -- Schedule the next update with new randomness
@@ -830,7 +819,7 @@ while running do
   end
 
   -- periodicly check if someone is teleporting to this device
-  ender_chest.setFrequency(localTeleporterFreq)  
+  ender_chest.setFrequency(localTeleporterFreq)
   local lastEnderchestSlot = transposer.getStackInSlot(enderchestSide, 27)
   if lastEnderchestSlot ~= nil then
     if string.find(lastEnderchestSlot.name, ackTokenName) then
