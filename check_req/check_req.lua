@@ -518,7 +518,7 @@ function TransposerReq:register()
       return false, nil, all_fail_ps
     end
 
-    local highest_succ_count = 0
+    local highest_succ_count = -1
     local highest_succ_count_ps = nil
     for address, _ in component.list("transposer") do
       local transposer = component.proxy(address)
