@@ -51,14 +51,14 @@ describe("Req:addComponent", function()
   end)
 
   it("succeeds when component is available", function()
-  oc.register("addr-1", "modem", {})
-  local r = Req.new()
-  r:addComponent("modem")
-  local ok, _, results = r:check()
-  assert.is_true(ok)
-  -- result is the tier (nil for components without tier detection), 
-  -- so just check overall success
-end)
+    oc.register("addr-1", "modem", {})
+    local r = Req.new()
+    r:addComponent("modem")
+    local ok, _, results = r:check()
+    assert.is_true(ok)
+    -- result is the tier (nil for components without tier detection),
+    -- so just check overall success
+  end)
 
   it("fails when component is missing", function()
     local r = Req.new()
@@ -94,7 +94,7 @@ end)
 
 describe("Req:addRequire", function()
   it("succeeds when module is loadable", function()
-    -- 'string' is always available
+     -- 'string' is always available
     local r = Req.new()
     r:addRequire("string")
     local ok = r:check()
@@ -176,7 +176,7 @@ describe("TransposerReq", function()
 
     local r = Req.new()
     r:addTransposer()
-      :requireInventory("minecraft:chest", nil, "chest_side")
+      :requireInventory("minecraft:chest", nil, nil, nil, "chest_side")
       :named("t")
       :register()
 
@@ -225,7 +225,7 @@ describe("TransposerReq", function()
 
     local r = Req.new()
     r:addTransposer()
-      :requireItem("minecraft:diamond", { min = 5 })  -- need at least 5
+      :requireItem("minecraft:diamond", { min = 5 }) -- need at least 5
       :register()
 
     local ok = r:check()
@@ -246,6 +246,84 @@ describe("TransposerReq", function()
 
     local ok = r:check()
     assert.is_true(ok)
+  end)
+
+  -- ─── ps (postscript) messages ───────────────────────────────────────
+
+  it("appends inventory fail_ps to the failure message", function()
+    local proxy = makeTransposer({ [S.north] = "minecraft:furnace" })
+    oc.register("t-addr-1", "transposer", proxy)
+
+    local r = Req.new()
+    r:addTransposer()
+      :requireInventory("minecraft:chest", nil, "chest not found!", nil)
+      :register()
+
+    local _, success_data = r:check()
+    -- ps is appended to the top-level fail_msg
+    assert.is_not_nil(success_data[1].message:find("chest not found!", 1, true))
+  end)
+
+  it("appends inventory succ_ps to the success message", function()
+    local proxy = makeTransposer({ [S.north] = "minecraft:chest" })
+    oc.register("t-addr-1", "transposer", proxy)
+
+    local r = Req.new()
+    r:addTransposer()
+      :requireInventory("minecraft:chest", nil, nil, "chest found!")
+      :register()
+
+    local _, success_data = r:check()
+    assert.is_not_nil(success_data[1].message:find("chest found!", 1, true))
+  end)
+
+  it("appends item fail_ps to the failure message", function()
+    -- transposer exists but has no diamonds
+    local proxy = makeTransposer(
+      { [S.south] = "minecraft:chest" },
+      {},
+      { [S.south] = { [1] = { name = "minecraft:dirt", size = 1 } } }
+    )
+    oc.register("t-addr-1", "transposer", proxy)
+
+    local r = Req.new()
+    r:addTransposer()
+      :requireItem("minecraft:diamond", nil, nil, nil, "missing diamonds!", nil)
+      :register()
+
+    local _, success_data = r:check()
+    assert.is_not_nil(success_data[1].message:find("missing diamonds!", 1, true))
+  end)
+
+  it("appends fluid fail_ps to the failure message", function()
+    local proxy = makeTransposer(
+      {},
+      { [S.east] = { { name = "minecraft:lava", amount = 500, capacity = 8000 } } }
+    )
+    oc.register("t-addr-1", "transposer", proxy)
+
+    local r = Req.new()
+    r:addTransposer()
+      :requireFluid("minecraft:water", nil, nil, nil, "water tank missing!")
+      :register()
+
+    local _, success_data = r:check()
+    assert.is_not_nil(success_data[1].message:find("water tank missing!", 1, true))
+  end)
+
+  it("does not append ps when it is nil", function()
+    local proxy = makeTransposer({ [S.north] = "minecraft:chest" })
+    oc.register("t-addr-1", "transposer", proxy)
+
+    local r = Req.new()
+    r:addTransposer()
+      :requireInventory("minecraft:chest") -- no ps args
+      :messages("No transposer", "Found transposer")
+      :register()
+
+    local _, success_data = r:check()
+    -- message should be exactly the succ_msg with no trailing garbage
+    assert.are.equal("Found transposer", success_data[1].message)
   end)
 end)
 
