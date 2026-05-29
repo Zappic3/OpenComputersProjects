@@ -867,13 +867,20 @@ local function updateTeleporterDisplay()
     currentTpsVersion = teleporterData.version
 
     -- switch to list mode
-    -- (-1 to subtract the local teleporter, that is not included in the display)
-    if settings.automaticallySwitchToList and settings.useListDisplayMode == false and #teleporterData.tps-1 > settings.touchUiMaxCols*settings.touchUiMaxRows then
-      settings.useListDisplayMode = true
-      screen.setTouchModeInverted(false)
-      term.clear()
-    end
+    if settings.automaticallySwitchToList and settings.useListDisplayMode == false then
+      local count = 0
+      for id, tp in pairs(teleporterData.tps) do
+        count = count+1
+      end
 
+      -- (-1 to subtract the local teleporter, that is not included in the display)
+      if count-1 > settings.touchUiMaxCols*settings.touchUiMaxRows then
+        settings.useListDisplayMode = true
+        screen.setTouchModeInverted(false)
+        term.clear()
+      end
+    end
+    
     if settings.useListDisplayMode then
       local x_res, y_res = gpu.getResolution()
       locationSelectorView = ui.View.new(x_res, y_res, 0x000000, 0xffffff)
