@@ -50,7 +50,7 @@ Additional mods used in this build:
 | 1x | Graphics Card<br>(Tier 2 works, but Tier 3 is recommended.) |
 | 1x | Redstone Card (Tier 1) |
 | 1x | Internet Card |
-| 1x | Central Processing Unit (CPU) (Tier 1) |
+| 1x | Central Processing Unit (CPU) (Any tier works. Better CPUs provide slightly faster reaction times, especially noticeable when using the searchbar in list display mode) |
 | 1x | Hard Disk Drive (Tier 1) |
 | 2x | Memory (Tier 2)<br>(Could possibly be downgraded, but I haven't tested that.) |
 | 1x | OpenOS (Operating System) floppy disk<br>(If you want to install the teleporter software after the build) |
