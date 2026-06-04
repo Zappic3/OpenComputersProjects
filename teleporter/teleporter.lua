@@ -826,6 +826,7 @@ local function listHandleSelection(tp)
 
   -- teleport
   if tp.data.frequency ~= nil then
+    computer.beep(800)
     teleportAway(data.frequency, data.name)
   end
 end
