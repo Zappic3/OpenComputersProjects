@@ -217,6 +217,7 @@ local listTotalPages = 1
 local listSearchText = "Type to search > "
 
 local originalUseListModeValue = nil
+local listHitMap = {} -- maps {y, x_start, x_end} -> teleporter entry
 
 -- used to restart the program after configuring local teleporter
 local chooseLocalTpMode = false
@@ -596,12 +597,11 @@ local function refreshScreen()
     -- Render the current page
     local startIndex = (listCurrentPage - 1) * itemsPerPage + 1
 
+    listHitMap = {}
     for i = 0, itemsPerPage - 1 do
       local entry = listFilteredTeleporters[startIndex + i]
-
       local col = math.floor(i / maxPerColumn)       -- which column
       local row = i % maxPerColumn                   -- which row within that column
-
       local x = col * colWidth + 1
       local y = listListYStart + row
 
@@ -615,6 +615,14 @@ local function refreshScreen()
         gpu.setBackground(to_num(entry.data.bg_color) or 0x000000)
         gpu.setForeground(to_num(entry.data.fg_color) or 0xFFFFFF)
         gpu.set(x, y, name)
+
+        -- register hit area
+        table.insert(listHitMap, {
+          y = y,
+          x_start = x,
+          x_end = x + colWidth - 1,
+          entry = entry
+        })
       else
         gpu.setBackground(0x000000)
         gpu.setForeground(0xFFFFFF)
@@ -951,7 +959,7 @@ local function updateTeleporterDisplay()
   end
 end
 
-local function touchListener(_, screenAdress, x, y, button, playerName) -- button: 0-rechtsklick, 1-linksklick
+local function touchListener(_, screenAdress, x, y, button, playerName) -- button: 0-rightclick, 1-leftclick
   if teleportinProgress == false then
       if locationSelectorView == nil then
         error("locationSelectorView is nil")
@@ -975,6 +983,19 @@ local function touchListener(_, screenAdress, x, y, button, playerName) -- butto
           else
             teleportAway(data.freq, data.name)
           end
+          return -- prevent duplicate touch events (skips incoming check)
+      end
+    end
+
+    -- check if item in list has been clicked
+    if settings.useListDisplayMode then
+      for _, hit in ipairs(listHitMap) do
+        if y == hit.y and x >= hit.x_start and x <= hit.x_end then
+          listHandleSelection(hit.entry)
+          listSearchQuery = ""
+          listApplyQuery(listSearchQuery)
+          break
+        end
       end
     end
   end
