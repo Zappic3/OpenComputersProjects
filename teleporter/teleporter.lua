@@ -93,7 +93,12 @@ local function parse_config(filename)
     return settings
 end
 
-local settings = parse_config(configFile)
+
+local settings_ok, settings = pcall(parse_config, configFile)
+if not settings_ok then
+  printError("Settings file not found. Place settings file at '" .. configFile .. "'")
+end
+
 local key_missing = false
 for _, key in pairs(savedSettingsKeys) do
   if settings[key] == nil then
