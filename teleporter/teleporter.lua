@@ -1122,7 +1122,7 @@ init = function()
   updateTeleporterData()
   if teleporterData == nil then
     printError("Teleporter data is nil!")
-    return
+    os.exit()
   end
   localTeleporterId = loadTeleporterId()
   if localTeleporterId == nil then
