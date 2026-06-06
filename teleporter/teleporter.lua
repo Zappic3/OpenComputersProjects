@@ -170,6 +170,7 @@ req:addTransposer()
     )
     :register()
 
+term.clear()
 local total_success, success_data, results_data = req:check()
 req:displayResults(true)
 
