@@ -561,6 +561,7 @@ local function updateTeleporterData()
     else
       printError("Error updating teleporter data: issue reading the tpDataSourceFile.\nMake sure '" .. settings.tpDataSourceFile .. "' is the correct filepath")
     end
+    printError("(Change your settings using 'edit " .. configFile .. "')")
   end
 end
 
