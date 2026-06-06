@@ -9,7 +9,7 @@ local shell = require("shell")
 local filesystem = require("filesystem")
 local unicode = require("unicode")
 
--- forwad declarations
+-- forward declarations
 local init
 
 -- settings
@@ -97,6 +97,7 @@ end
 local settings_ok, settings = pcall(parse_config, configFile)
 if not settings_ok then
   printError("Settings file not found. Place settings file at '" .. configFile .. "'")
+  return
 end
 
 local key_missing = false
@@ -149,9 +150,10 @@ req:addComponent("ender_chest", "ender_chest", nil,
   "Teleporter requires an Enderchest connected via an Adapter")
 req:addComponent("redstone", "redstone", nil,
   "Teleporter requires a redstone card")
-  --todo make intenet card optional based on settings
-req:addComponent("internet", "internet", nil,
-  "Teleporter requires an internet card") 
+if settings.useWebDataSource then
+  req:addComponent("internet", "internet", nil,
+  "Teleporter requires an internet card, because 'useWebDataSource' is set to 'true'")
+end
 req:addComponent("transposer", "transposer", nil,
   "Teleporter requires a transposer")
 
@@ -228,7 +230,7 @@ local listHitMap = {} -- maps {y, x_start, x_end} -> teleporter entry
 local chooseLocalTpMode = false
 
 local function decodeFreqToColor(freq)
-  -- convert ferquency to 3-digit hex number
+  -- convert frequency to 3-digit hex number
   local hexChars = "0123456789abcdef"
   local result = ""
 
@@ -253,13 +255,11 @@ local function checkItemReqs()
   local itemReqs = check_req.new()
 
   itemReqs:addTransposer()
-  :messages("An error occured while performing item checks. Fix them and try again:\n")
-  -- token in 1. slot
+  :messages("An error occurred while performing item checks. Fix them and try again:\n")
+  -- spatial disk in 1. slot
   :requireItem(settings.spatialDiskName, 1, 1, settings.storageSide, " > Expected 1x Spatial Storage Disk (".. settings.spatialDiskName ..") in container slot 1")
   -- ack token in 2. slot
   :requireItem(settings.ackTokenName, 1, 2, settings.storageSide, " > Expected 1x Token (".. settings.ackTokenName ..") in container slot 2")
-  -- spatial storage disk in 2. slot
-  :requireItem(settings.ackTokenName, 1, 2, settings.storageSide, " > Expected 1x (" .. settings.ackTokenName .. ") in container slot 2")
   -- spatial io output slot empty
   :requireItem(nil, 0, 2, spatialIoSide, " > SpatialIO output slot needs to be empty")
   -- spatial io input slot empty
@@ -420,8 +420,8 @@ local function drawData(view, rect_id, data)
 
       -- Trim line if it exceeds the rectangle's width
       local text_to_draw = tostring(line)
-      if utf8.len(line) > max_text_width then
-        text_to_draw = string.sub(line, 1, max_text_width + 1)
+      if unicode.len(line) > max_text_width then
+        text_to_draw = unicode.sub(line, 1, max_text_width + 1)
       end
       gpu.set(x_start, y_pos, text_to_draw)
     end
@@ -667,7 +667,7 @@ local function teleportAway(freq, name)
   ender_chest.setFrequency(freq)
   -- check if another teleporter is currently occupying the destination teleporter
   drawTpLog("Check if target teleporter is already occupied...")
-  -- todo abort after timeout
+  local startedWaitingForRecieverResponse = computer.uptime()
   while true do
     local enderchestFirstSlot = transposer.getStackInSlot(enderchestSide, 1)
     local enderchestLastSlot = transposer.getStackInSlot(enderchestSide, 27)
@@ -675,24 +675,37 @@ local function teleportAway(freq, name)
       drawTpLog("Target teleporter is not occupied!")
       break
     end
+
+    -- abort on timeout
+    if computer.uptime() > startedWaitingForRecieverResponse + settings.waitingForResponseTimeout then
+      drawTpLog("Receiver appears to be occupied by another player. Try again later! Aborting...")
+      tpLogCleanup()
+      refreshScreen()
+      ender_chest.setFrequency(localTeleporterFreq)
+      teleportinProgress = false
+      return
+    end
+
+    os.sleep(0.1)
   end
   -- reserve teleporter
   drawTpLog("Reserve target teleporter...")
   transposer.transferItem(settings.storageSide, enderchestSide, 1, 2, 27)
 
   -- check if teleporter is online
-  drawTpLog("Wait for reciever response...")
+  drawTpLog("Wait for receiver response...")
   local startedWaitingForRecieverResponse = computer.uptime()
   while true do
     local enderchestLastSlot = transposer.getStackInSlot(enderchestSide, 27)
     if enderchestLastSlot then
       if enderchestLastSlot.size == 2 then
-        drawTpLog("Reciever is online!")
+        drawTpLog("Receiver is online!")
         break
       end
     end
+    -- abort on timeout
     if computer.uptime() > startedWaitingForRecieverResponse + settings.waitingForResponseTimeout then
-      drawTpLog("Reciever appears to be offline, aborting...")
+      drawTpLog("Receiver appears to be offline, aborting...")
       drawTpLog("Retrieving reservation token...")
       transposer.transferItem(enderchestSide, settings.storageSide, 1, 27, 2)
       tpLogCleanup()
@@ -701,6 +714,7 @@ local function teleportAway(freq, name)
       teleportinProgress = false
       return
     end
+    os.sleep(0.1)
   end
 
   drawTpLog("Teleporting in:")
@@ -723,22 +737,22 @@ local function teleportAway(freq, name)
   end
   drawTpLog("Found spatial storage disk in SpatialIO output slot...")
   -- disk in ender_chest legen
-  drawTpLog("Transfering disk to enderchest...")
+  drawTpLog("Transferring disk to enderchest...")
   transposer.transferItem(spatialIoSide, enderchestSide, 1, 2, 1)
-  drawTpLog("Retreiving reservation token...")
+  drawTpLog("Retrieving reservation token...")
   transposer.transferItem(enderchestSide, settings.storageSide, 1, 27, 2)
-  drawTpLog("Waiting for reciever ACK teleport..")
-  drawTpLog("(if this step takes very long, something on the reciever side may be broken)")
+  drawTpLog("Waiting for receiver to ACK teleport...")
+  drawTpLog("(if this step takes very long, something on the receiver side may be broken)")
   while true do
     local ack = transposer.getStackInSlot(enderchestSide, 27)
     if ack == nil then
-      drawTpLog("Recieved ACKed teleport")
+      drawTpLog("Received ACKed teleport")
       break
     end
   end
-  drawTpLog("Transfering disk from enderchets to Storage...")
+  drawTpLog("Transferring disk from enderchest to Storage...")
   transposer.transferItem(enderchestSide, settings.storageSide, 1, 1, 1)
-  local colors = decodeFreqToColor(localTeleporterFreq)
+  colors = decodeFreqToColor(localTeleporterFreq)
   drawTpLog(string.format("Resetting frequency to %s (%s, %s, %s)...", localTeleporterFreq, colors[1], colors[2],
     colors[3]))
   ender_chest.setFrequency(localTeleporterFreq)
@@ -749,7 +763,7 @@ local function teleportAway(freq, name)
 end
 
 local function listApplyQuery(query)
-  local query = query or ""
+  query = query or ""
 
   if teleporterData == nil then
     return
@@ -811,7 +825,7 @@ local function listHandleSelection(tp)
   local data = tp.data
 
   if id == nil or data == nil then
-    printError("Teleporter id or data was nil:\n id: " .. id .. ", data: " .. data)
+    printError("... id: " .. tostring(id) .. ", data: " .. tostring(data))
     return
   end
 
@@ -1046,24 +1060,38 @@ local function cleanup()
   print("Program terminated successfully.")
 end
 
-local function recieveTeleport()
+local function receiveTeleport()
   teleportinProgress = true
   tpLogSetup()
   drawTpLog("##### TELEPORT IN PROGRESS #####", true)
   drawTpLog("##### DON'T INTERRUPT THIS DEVICE #####", true)
   drawTpLog("Sending ACK to prove we are online...")
   transposer.transferItem(settings.storageSide, enderchestSide, 1, 2, 27)
-  drawTpLog("Waiting for sender to transmitt disk...")
+  drawTpLog("Waiting for sender to transmit disk...")
+
+  local startedWaitingForSenderResponse = computer.uptime()
   while true do
     local enderchestFirstSlot = transposer.getStackInSlot(enderchestSide, 1)
     if enderchestFirstSlot ~= nil and string.find(enderchestFirstSlot.name, settings.spatialDiskName) then
-      drawTpLog("Disk recieved!")
+      drawTpLog("Disk received!")
       break
     end
+    -- abort on timeout
+    if computer.uptime() > startedWaitingForSenderResponse + settings.waitingForResponseTimeout then
+      drawTpLog("Timeout while waiting for sender to transmit disk. Aborting...")
+      drawTpLog("Retrieving token...")
+      transposer.transferItem(ender_chest, settings.storageSide, 1, 27, 2)
+      tpLogCleanup()
+      refreshScreen()
+      ender_chest.setFrequency(localTeleporterFreq)
+      teleportinProgress = false
+      return
+    end
+    os.sleep(0.1)
   end
   drawTpLog("Moving Stored disk to Enderchest...")
   transposer.transferItem(settings.storageSide, enderchestSide, 1, 1, 2)
-  drawTpLog("Moving recieved disk to Spatial IO...")
+  drawTpLog("Moving received disk to Spatial IO...")
   transposer.transferItem(enderchestSide, spatialIoSide, 1, 1, 1)
   -- wait for the game to load
   drawTpLog("Waiting for safety reasons...")
@@ -1096,17 +1124,28 @@ local function recieveTeleport()
   drawTpLog("Found spatial storage disk in SpatialIO output slot...")
   drawTpLog("Moving empty disk from SpatialIO output to Enderchest...")
   transposer.transferItem(spatialIoSide, enderchestSide, 1, 2, 1)
-  drawTpLog("Moving stored disk from Enderchest to back to Storage...")
+  drawTpLog("Moving stored disk from Enderchest back to Storage...")
   transposer.transferItem(enderchestSide, settings.storageSide, 1, 2, 1)
-  drawTpLog("Sending ACK...") -- token aus enderchest entfdernen
+  drawTpLog("Sending ACK...") -- remove token from enderchest
   transposer.transferItem(enderchestSide, settings.storageSide, 1, 27, 2)
   drawTpLog("Waiting until sender has retrieved disk...")
+  startedWaitingForSenderResponse = computer.uptime()
   while true do
     local enderchestLastSlot = transposer.getStackInSlot(enderchestSide, 1)
     if enderchestLastSlot == nil then
       drawTpLog("Sender has retrieved disk!")
       break
     end
+    -- abort on timeout
+    if computer.uptime() > startedWaitingForSenderResponse + settings.waitingForResponseTimeout then
+      drawTpLog("Timeout while waiting for sender to retrieve disk. Aborting...")
+      tpLogCleanup()
+      refreshScreen()
+      ender_chest.setFrequency(localTeleporterFreq)
+      teleportinProgress = false
+      return
+    end
+    os.sleep(0.1)
   end
   drawTpLog("Teleporting sequence complete!")
   lastWalkTime = computer.uptime() -- ensure the computer doesnt enter sleep mode too early
@@ -1131,7 +1170,7 @@ init = function()
   else
     local localTp = teleporterData.tps[localTeleporterId]
     if localTp == nil then
-      printError("local teleporter id '".. localTeleporterId .."' couldnt be found in teleporter list.\nMake sure '" .. settings.saveDir .. settings.saveFileName .. "' contains a valid teleporter id.\n(Or delete the file to view the selector again)")
+      printError("local teleporter id '".. localTeleporterId .."' couldn't be found in teleporter list.\nMake sure '" .. settings.saveDir .. settings.saveFileName .. "' contains a valid teleporter id.\n(Or delete the file to view the selector again)")
       os.exit()
     end
     localTeleporterName = localTp.name
@@ -1143,9 +1182,9 @@ init = function()
     checkItemReqs()
   end
 
-  -- set resolution for sqare screens
-  local x_aspect, y_apsect = screen.getAspectRatio()
-  if x_aspect == y_apsect then
+  -- set resolution for square screens
+  local x_aspect, y_aspect = screen.getAspectRatio()
+  if x_aspect == y_aspect then
     local w, h = gpu.maxResolution()
     gpu.setResolution(2 * h, h)
   end
@@ -1247,9 +1286,9 @@ while running do
     local lastEnderchestSlot = transposer.getStackInSlot(enderchestSide, 27)
     if lastEnderchestSlot ~= nil then
         if string.find(lastEnderchestSlot.name, settings.ackTokenName) then
-            recieveTeleport()
+            receiveTeleport()
         else
-            error("Item is in the enderchests last slot that shouldn't be there")
+            error("Some item is in the enderchest's last slot that shouldn't be there")
         end
     end
   end
